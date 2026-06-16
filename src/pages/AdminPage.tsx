@@ -5,6 +5,7 @@ import {
   List,
   LogIn,
   LogOut,
+  Mail,
   RefreshCw,
   Loader2,
   Trophy,
@@ -14,15 +15,21 @@ import {
   Calendar,
   ChevronUp,
   ChevronDown,
+  KeyRound,
+  Settings,
+  UserPlus,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Vote, TruckTally } from '../lib/types';
 
-const ADMIN_PASSWORD = 'truckmeet2025';
-
 type SortKey = 'truck_number' | 'voter_name' | 'mobile_number' | 'created_at';
 type SortDir = 'asc' | 'desc';
-type Tab = 'summary' | 'individual';
+type Tab = 'summary' | 'individual' | 'settings';
+
+const LOCAL_ADMIN_ENABLED =
+  import.meta.env.DEV && import.meta.env.VITE_ENABLE_LOCAL_ADMIN === 'true';
+const LOCAL_ADMIN_EMAIL = import.meta.env.VITE_LOCAL_ADMIN_EMAIL as string | undefined;
+const LOCAL_ADMIN_PASSWORD = import.meta.env.VITE_LOCAL_ADMIN_PASSWORD as string | undefined;
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString('sv-SE', {
@@ -36,63 +43,291 @@ function formatDate(iso: string) {
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [passwordError, setPasswordError] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [setupMessage, setSetupMessage] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [localAdmin, setLocalAdmin] = useState(false);
+  const [hasAdminUsers, setHasAdminUsers] = useState<boolean | null>(null);
 
   const [tab, setTab] = useState<Tab>('summary');
   const [votes, setVotes] = useState<Vote[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [createAdminLoading, setCreateAdminLoading] = useState(false);
+  const [createAdminMessage, setCreateAdminMessage] = useState('');
+  const [createAdminError, setCreateAdminError] = useState('');
+  const [newAdminEmail, setNewAdminEmail] = useState('');
 
   const [sortKey, setSortKey] = useState<SortKey>('created_at');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.rpc('has_admins').then(({ data }) => {
+      if (!mounted) return;
+      setHasAdminUsers(Boolean(data));
+    });
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      const userEmail = data.session?.user.email ?? '';
+      setAuthed(Boolean(data.session));
+      setAdminEmail(userEmail);
+      setAuthChecked(true);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      const userEmail = session?.user.email ?? '';
+      setAuthed(Boolean(session));
+      setAdminEmail(userEmail);
+      setAuthChecked(true);
+    });
+
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password === ADMIN_PASSWORD) {
-      // Sign in with a service session via anon key — we'll use service role via RLS bypass
-      // For simplicity, use a shared admin credential stored in Supabase Auth
-      const { error } = await supabase.auth.signInWithPassword({
-        email: 'admin@truckmeet.local',
-        password: ADMIN_PASSWORD,
-      });
-      if (error) {
-        // Fallback: try to create the admin user first
-        await supabase.auth.signUp({
-          email: 'admin@truckmeet.local',
-          password: ADMIN_PASSWORD,
-        });
-        const { error: retryError } = await supabase.auth.signInWithPassword({
-          email: 'admin@truckmeet.local',
-          password: ADMIN_PASSWORD,
-        });
-        if (retryError) {
-          setPasswordError('Inloggning misslyckades. Kontakta teknisk support.');
-          return;
-        }
-      }
+    setAuthLoading(true);
+    setLoginError('');
+
+    if (
+      LOCAL_ADMIN_ENABLED &&
+      email.trim() === LOCAL_ADMIN_EMAIL &&
+      password === LOCAL_ADMIN_PASSWORD
+    ) {
+      setLocalAdmin(true);
       setAuthed(true);
-      setPasswordError('');
-    } else {
-      setPasswordError('Fel lösenord.');
+      setAdminEmail(email.trim());
+      setAuthLoading(false);
+      return;
     }
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+
+    if (error) {
+      setLoginError('Inloggning misslyckades. Kontrollera e-post och lösenord.');
+    } else if (hasAdminUsers === false && data.user.email) {
+      const { error: adminError } = await supabase.from('admin_users').insert({
+        email: data.user.email.toLowerCase(),
+        created_by: data.user.id,
+      });
+
+      if (adminError) {
+        setLoginError('Du är inloggad, men första adminrollen kunde inte skapas.');
+      } else {
+        setHasAdminUsers(true);
+        setAdminEmail(data.user.email);
+      }
+    }
+
+    setAuthLoading(false);
+  };
+
+  const createFirstAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setLoginError('');
+    setSetupMessage('');
+
+    if (hasAdminUsers) {
+      setLoginError('Första admin är redan skapad.');
+      setAuthLoading(false);
+      return;
+    }
+
+    if (password.length < 8) {
+      setLoginError('Lösenordet måste vara minst 8 tecken.');
+      setAuthLoading(false);
+      return;
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    let sessionUserId = '';
+
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email: normalizedEmail,
+      password,
+    });
+
+    if (signUpError) {
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      });
+
+      if (signInError) {
+        setLoginError('Kunde inte skapa första admin. Kontrollera e-post och lösenord.');
+        setAuthLoading(false);
+        return;
+      }
+
+      sessionUserId = signInData.user.id;
+    } else if (signUpData.session && signUpData.user) {
+      sessionUserId = signUpData.user.id;
+    } else {
+      setSetupMessage('Kontot är skapat. Bekräfta e-posten om Supabase kräver det och logga sedan in här.');
+      setAuthLoading(false);
+      return;
+    }
+
+    const { error: adminError } = await supabase.from('admin_users').insert({
+      email: normalizedEmail,
+      created_by: sessionUserId,
+    });
+
+    if (adminError) {
+      setLoginError('Kontot skapades, men kunde inte göras till admin. Försök logga in och skapa första admin igen.');
+    } else {
+      setHasAdminUsers(true);
+      setAuthed(true);
+      setAdminEmail(normalizedEmail);
+      setSetupMessage('');
+    }
+
+    setAuthLoading(false);
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
+    if (!localAdmin) {
+      await supabase.auth.signOut();
+    }
     setAuthed(false);
+    setLocalAdmin(false);
+    setEmail('');
     setPassword('');
+    setAdminEmail('');
     setVotes([]);
+  };
+
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordLoading(true);
+    setPasswordMessage('');
+    setPasswordError('');
+
+    if (localAdmin) {
+      setPasswordError('Det lokala förhandsvisningskontot kan inte byta lösenord.');
+      setPasswordLoading(false);
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      setPasswordError('Lösenordet måste vara minst 8 tecken.');
+      setPasswordLoading(false);
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('Lösenorden matchar inte.');
+      setPasswordLoading(false);
+      return;
+    }
+
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+
+    if (error) {
+      setPasswordError('Kunde inte byta lösenord. Försök igen.');
+    } else {
+      setPasswordMessage('Lösenordet är uppdaterat.');
+      setNewPassword('');
+      setConfirmPassword('');
+    }
+
+    setPasswordLoading(false);
+  };
+
+  const signUpAdminAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setLoginError('');
+    setSetupMessage('');
+
+    if (password.length < 8) {
+      setLoginError('Lösenordet måste vara minst 8 tecken.');
+      setAuthLoading(false);
+      return;
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const { data, error } = await supabase.auth.signUp({
+      email: normalizedEmail,
+      password,
+    });
+
+    if (error) {
+      setLoginError('Kunde inte skapa konto. Finns e-postadressen redan kan du logga in i stället.');
+    } else if (!data.session) {
+      setSetupMessage('Kontot är skapat. Bekräfta e-posten om Supabase kräver det och logga sedan in.');
+    }
+
+    setAuthLoading(false);
+  };
+
+  const createAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateAdminLoading(true);
+    setCreateAdminMessage('');
+    setCreateAdminError('');
+
+    if (localAdmin) {
+      setCreateAdminError('Det lokala förhandsvisningskontot kan inte skapa riktiga användare.');
+      setCreateAdminLoading(false);
+      return;
+    }
+
+    const normalizedEmail = newAdminEmail.trim().toLowerCase();
+    const { error } = await supabase.from('admin_users').insert({
+      email: normalizedEmail,
+    });
+
+    if (error) {
+      setCreateAdminError('Kunde inte lägga till admin. Finns e-postadressen redan?');
+    } else {
+      setCreateAdminMessage(`${normalizedEmail} kan nu skapa konto eller logga in som admin.`);
+      setNewAdminEmail('');
+    }
+
+    setCreateAdminLoading(false);
   };
 
   const fetchVotes = useCallback(async () => {
     setLoading(true);
+    setLoadError('');
+
+    if (localAdmin) {
+      setVotes([]);
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('votes')
       .select('*')
       .order('created_at', { ascending: false });
-    if (!error && data) setVotes(data as Vote[]);
+    if (error) {
+      setLoadError('Kunde inte hämta röster. Kontrollera att kontot har adminbehörighet.');
+    } else if (data) {
+      setVotes(data as Vote[]);
+    }
     setLoading(false);
-  }, []);
+  }, [localAdmin]);
 
   useEffect(() => {
     if (authed) fetchVotes();
@@ -131,6 +366,14 @@ export default function AdminPage() {
       : <ChevronDown className="w-3.5 h-3.5 text-amber-400" />;
   }
 
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
+        <Loader2 className="w-8 h-8 text-amber-400 animate-spin" />
+      </div>
+    );
+  }
+
   if (!authed) {
     return (
       <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
@@ -143,25 +386,75 @@ export default function AdminPage() {
             <p className="text-zinc-500 text-sm mt-1">Åseda Truckmeet — Publikens Val</p>
           </div>
           <form onSubmit={login} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+            <label className="block text-zinc-300 text-sm font-semibold mb-2">E-post</label>
+            <div className="relative mb-4">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+              <input
+                type="email"
+                autoComplete="username"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@example.com"
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-xl pl-10 pr-4 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+              />
+            </div>
+
             <label className="block text-zinc-300 text-sm font-semibold mb-2">Lösenord</label>
             <input
               type="password"
+              autoComplete="current-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Ange adminlösenord"
+              placeholder="Ange lösenord"
               className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all mb-4"
             />
-            {passwordError && (
-              <p className="text-red-400 text-sm mb-4">{passwordError}</p>
+            {loginError && (
+              <p className="text-red-400 text-sm mb-4">{loginError}</p>
+            )}
+            {setupMessage && (
+              <p className="text-emerald-400 text-sm mb-4">{setupMessage}</p>
             )}
             <button
               type="submit"
-              className="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
+              disabled={authLoading}
+              className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-amber-500/50 disabled:cursor-not-allowed text-zinc-950 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
             >
-              <LogIn className="w-4 h-4" />
-              Logga in
+              {authLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Loggar in...
+                </>
+              ) : (
+                <>
+                  <LogIn className="w-4 h-4" />
+                  Logga in
+                </>
+              )}
             </button>
+            {hasAdminUsers === false && (
+              <button
+                type="button"
+                onClick={(e) => createFirstAdmin(e)}
+                disabled={authLoading}
+                className="w-full mt-3 border border-amber-500/40 hover:border-amber-400 text-amber-300 hover:text-amber-200 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
+              >
+                <UserPlus className="w-4 h-4" />
+                Skapa första admin
+              </button>
+            )}
+            {hasAdminUsers && (
+              <button
+                type="button"
+                onClick={(e) => signUpAdminAccount(e)}
+                disabled={authLoading}
+                className="w-full mt-3 border border-zinc-700 hover:border-zinc-600 text-zinc-300 hover:text-white font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
+              >
+                <UserPlus className="w-4 h-4" />
+                Skapa konto
+              </button>
+            )}
           </form>
         </div>
       </div>
@@ -186,6 +479,11 @@ export default function AdminPage() {
             <span className="hidden sm:block text-zinc-500 text-xs">
               {votes.length} röst{votes.length !== 1 ? 'er' : ''}
             </span>
+            {adminEmail && (
+              <span className="hidden md:block text-zinc-600 text-xs max-w-48 truncate">
+                {adminEmail}
+              </span>
+            )}
             <button
               onClick={fetchVotes}
               disabled={loading}
@@ -226,10 +524,10 @@ export default function AdminPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1 mb-6 w-fit">
+        <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1 mb-6 max-w-full overflow-x-auto w-fit">
           <button
             onClick={() => setTab('summary')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all ${
               tab === 'summary'
                 ? 'bg-amber-500 text-zinc-950'
                 : 'text-zinc-400 hover:text-white'
@@ -240,7 +538,7 @@ export default function AdminPage() {
           </button>
           <button
             onClick={() => setTab('individual')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all ${
               tab === 'individual'
                 ? 'bg-amber-500 text-zinc-950'
                 : 'text-zinc-400 hover:text-white'
@@ -249,24 +547,186 @@ export default function AdminPage() {
             <List className="w-4 h-4" />
             Individuella svar
           </button>
+          <button
+            onClick={() => setTab('settings')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all ${
+              tab === 'settings'
+                ? 'bg-amber-500 text-zinc-950'
+                : 'text-zinc-400 hover:text-white'
+            }`}
+          >
+            <Settings className="w-4 h-4" />
+            Inställningar
+          </button>
         </div>
 
-        {loading && votes.length === 0 ? (
+        {tab === 'settings' ? (
+          <SettingsTab
+            adminEmail={adminEmail}
+            localAdmin={localAdmin}
+            newPassword={newPassword}
+            confirmPassword={confirmPassword}
+            passwordLoading={passwordLoading}
+            passwordMessage={passwordMessage}
+            passwordError={passwordError}
+            newAdminEmail={newAdminEmail}
+            createAdminLoading={createAdminLoading}
+            createAdminMessage={createAdminMessage}
+            createAdminError={createAdminError}
+            setNewPassword={setNewPassword}
+            setConfirmPassword={setConfirmPassword}
+            setNewAdminEmail={setNewAdminEmail}
+            changePassword={changePassword}
+            createAdmin={createAdmin}
+          />
+        ) : loading && votes.length === 0 ? (
           <div className="flex items-center justify-center py-24">
             <Loader2 className="w-8 h-8 text-amber-400 animate-spin" />
+          </div>
+        ) : loadError ? (
+          <div className="bg-red-950/50 border border-red-900/50 rounded-xl p-4 text-red-300 text-sm">
+            {loadError}
           </div>
         ) : tab === 'summary' ? (
           <SummaryTab tally={tally} maxVotes={maxVotes} />
         ) : (
           <IndividualTab
             votes={sortedVotes}
-            sortKey={sortKey}
-            sortDir={sortDir}
             toggleSort={toggleSort}
             SortIcon={SortIcon}
           />
         )}
       </div>
+    </div>
+  );
+}
+
+function SettingsTab({
+  adminEmail,
+  localAdmin,
+  newPassword,
+  confirmPassword,
+  passwordLoading,
+  passwordMessage,
+  passwordError,
+  newAdminEmail,
+  createAdminLoading,
+  createAdminMessage,
+  createAdminError,
+  setNewPassword,
+  setConfirmPassword,
+  setNewAdminEmail,
+  changePassword,
+  createAdmin,
+}: {
+  adminEmail: string;
+  localAdmin: boolean;
+  newPassword: string;
+  confirmPassword: string;
+  passwordLoading: boolean;
+  passwordMessage: string;
+  passwordError: string;
+  newAdminEmail: string;
+  createAdminLoading: boolean;
+  createAdminMessage: string;
+  createAdminError: string;
+  setNewPassword: (value: string) => void;
+  setConfirmPassword: (value: string) => void;
+  setNewAdminEmail: (value: string) => void;
+  changePassword: (e: React.FormEvent) => void;
+  createAdmin: (e: React.FormEvent) => void;
+}) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {localAdmin && (
+        <div className="lg:col-span-2 bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-amber-200 text-sm">
+          Du är inloggad med ett lokalt förhandsvisningskonto. Lösenordsbyte och användarskapande fungerar när appen körs mot riktig Supabase.
+        </div>
+      )}
+
+      <form onSubmit={changePassword} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
+        <div className="flex items-center gap-2 mb-5">
+          <KeyRound className="w-4 h-4 text-amber-400" />
+          <h2 className="text-white font-bold text-base">Byt lösenord</h2>
+        </div>
+        <p className="text-zinc-500 text-xs mb-4">{adminEmail}</p>
+
+        <label className="block text-zinc-300 text-sm font-semibold mb-2">Nytt lösenord</label>
+        <input
+          type="password"
+          autoComplete="new-password"
+          minLength={8}
+          required
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all mb-4"
+        />
+
+        <label className="block text-zinc-300 text-sm font-semibold mb-2">Bekräfta lösenord</label>
+        <input
+          type="password"
+          autoComplete="new-password"
+          minLength={8}
+          required
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all mb-4"
+        />
+
+        {passwordError && <p className="text-red-400 text-sm mb-4">{passwordError}</p>}
+        {passwordMessage && <p className="text-emerald-400 text-sm mb-4">{passwordMessage}</p>}
+
+        <button
+          type="submit"
+          disabled={passwordLoading}
+          className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-amber-500/50 disabled:cursor-not-allowed text-zinc-950 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
+        >
+          {passwordLoading ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Sparar...
+            </>
+          ) : (
+            'Byt lösenord'
+          )}
+        </button>
+      </form>
+
+      <form onSubmit={createAdmin} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
+        <div className="flex items-center gap-2 mb-5">
+          <UserPlus className="w-4 h-4 text-amber-400" />
+          <h2 className="text-white font-bold text-base">Lägg till admin</h2>
+        </div>
+
+        <label className="block text-zinc-300 text-sm font-semibold mb-2">E-post</label>
+        <input
+          type="email"
+          autoComplete="off"
+          required
+          value={newAdminEmail}
+          onChange={(e) => setNewAdminEmail(e.target.value)}
+          placeholder="ny-admin@example.com"
+          className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all mb-4"
+        />
+
+        {createAdminError && <p className="text-red-400 text-sm mb-4">{createAdminError}</p>}
+        {createAdminMessage && <p className="text-emerald-400 text-sm mb-4">{createAdminMessage}</p>}
+
+        <button
+          type="submit"
+          disabled={createAdminLoading}
+          className="w-full bg-amber-500 hover:bg-amber-400 disabled:bg-amber-500/50 disabled:cursor-not-allowed text-zinc-950 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
+        >
+          {createAdminLoading ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Sparar...
+            </>
+          ) : (
+            'Lägg till admin'
+          )}
+        </button>
+      </form>
     </div>
   );
 }
@@ -328,14 +788,10 @@ function SummaryTab({ tally, maxVotes }: { tally: TruckTally[]; maxVotes: number
 
 function IndividualTab({
   votes,
-  sortKey,
-  sortDir,
   toggleSort,
   SortIcon,
 }: {
   votes: Vote[];
-  sortKey: SortKey;
-  sortDir: SortDir;
   toggleSort: (k: SortKey) => void;
   SortIcon: React.FC<{ k: SortKey }>;
 }) {
