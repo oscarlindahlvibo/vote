@@ -51,6 +51,7 @@ export default function AdminPage() {
   const [authLoading, setAuthLoading] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
   const [loginError, setLoginError] = useState('');
   const [setupMessage, setSetupMessage] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
@@ -189,7 +190,7 @@ export default function AdminPage() {
     } else if (signUpData.session && signUpData.user) {
       sessionUserId = signUpData.user.id;
     } else {
-      setSetupMessage('Kontot är skapat. Bekräfta e-posten om Supabase kräver det och logga sedan in här.');
+      setSetupMessage('Kontot är skapat. Ange verifieringskoden från mejlet här nedan.');
       setAuthLoading(false);
       return;
     }
@@ -206,6 +207,86 @@ export default function AdminPage() {
       setAuthed(true);
       setAdminEmail(normalizedEmail);
       setSetupMessage('');
+    }
+
+    setAuthLoading(false);
+  };
+
+  const verifyEmailCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setLoginError('');
+    setSetupMessage('');
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const cleanedCode = verificationCode.trim().replace(/\s+/g, '');
+
+    if (!normalizedEmail || !cleanedCode) {
+      setLoginError('Ange e-post och verifieringskod.');
+      setAuthLoading(false);
+      return;
+    }
+
+    const { data, error } = await supabase.auth.verifyOtp({
+      email: normalizedEmail,
+      token: cleanedCode,
+      type: 'signup',
+    });
+
+    if (error || !data.user) {
+      setLoginError('Koden kunde inte verifieras. Kontrollera koden eller skicka en ny.');
+      setAuthLoading(false);
+      return;
+    }
+
+    if (hasAdminUsers === false && data.user.email) {
+      const { error: adminError } = await supabase.from('vote_admin_users').insert({
+        email: data.user.email.toLowerCase(),
+        created_by: data.user.id,
+      });
+
+      if (adminError) {
+        setLoginError('E-postadressen verifierades, men första adminrollen kunde inte skapas.');
+      } else {
+        setHasAdminUsers(true);
+        setAuthed(true);
+        setAdminEmail(data.user.email);
+        setVerificationCode('');
+      }
+    } else {
+      setAuthed(true);
+      setAdminEmail(data.user.email ?? normalizedEmail);
+      setVerificationCode('');
+    }
+
+    setAuthLoading(false);
+  };
+
+  const resendVerificationCode = async () => {
+    setAuthLoading(true);
+    setLoginError('');
+    setSetupMessage('');
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!normalizedEmail) {
+      setLoginError('Ange e-postadress först.');
+      setAuthLoading(false);
+      return;
+    }
+
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: normalizedEmail,
+      options: {
+        emailRedirectTo: getAdminRedirectUrl(),
+      },
+    });
+
+    if (error) {
+      setLoginError('Kunde inte skicka ny verifieringskod.');
+    } else {
+      setSetupMessage('Ny verifieringskod skickad.');
     }
 
     setAuthLoading(false);
@@ -284,7 +365,7 @@ export default function AdminPage() {
     if (error) {
       setLoginError('Kunde inte skapa konto. Finns e-postadressen redan kan du logga in i stället.');
     } else if (!data.session) {
-      setSetupMessage('Kontot är skapat. Bekräfta e-posten om Supabase kräver det och logga sedan in.');
+      setSetupMessage('Kontot är skapat. Ange verifieringskoden från mejlet här nedan.');
     }
 
     setAuthLoading(false);
@@ -426,6 +507,40 @@ export default function AdminPage() {
             {setupMessage && (
               <p className="text-emerald-400 text-sm mb-4">{setupMessage}</p>
             )}
+
+            <div className="border-t border-zinc-800 pt-4 mb-4">
+              <label className="block text-zinc-300 text-sm font-semibold mb-2">
+                Verifieringskod
+              </label>
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={verificationCode}
+                onChange={(e) => setVerificationCode(e.target.value)}
+                placeholder="Koden från mejlet"
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all mb-3"
+              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={verifyEmailCode}
+                  disabled={authLoading}
+                  className="border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 hover:text-emerald-200 font-bold py-2.5 rounded-xl transition-all"
+                >
+                  Verifiera kod
+                </button>
+                <button
+                  type="button"
+                  onClick={resendVerificationCode}
+                  disabled={authLoading}
+                  className="border border-zinc-700 hover:border-zinc-600 text-zinc-300 hover:text-white font-bold py-2.5 rounded-xl transition-all"
+                >
+                  Skicka ny kod
+                </button>
+              </div>
+            </div>
+
             <button
               type="submit"
               disabled={authLoading}

@@ -21,17 +21,29 @@ Adminpanelen använder Supabase Auth. Skapa inga adminlösenord i frontend-koden
 
    Appen skickar även med aktuell `/admin`-adress när ett konto skapas, så lokala tester går till lokal admin och produktion går till produktionsadmin.
 
-3. Kör Supabase-migrationerna. De skapar `vote_admin_users`, låser röster till admins för just vote-appen och gör att första adminkontot kan skapas direkt i appen när adminlistan är tom.
+3. Uppdatera Supabase Auth signup-mejlet så det visar en kod som kan skrivas in i appen. I mailmallen kan du använda:
 
-4. Deploya Edge Function för röstning om den inte redan är deployad:
+   ```html
+   <h2>Bekräfta din e-post</h2>
+   <p>Din verifieringskod är:</p>
+   <p style="font-size: 24px; font-weight: bold;">{{ .Token }}</p>
+   ```
+
+   Länken kan finnas kvar om du vill, men adminpanelen har ett fält där koden kan anges direkt.
+
+4. Kör Supabase-migrationerna. De skapar `vote_admin_users`, låser röster till admins för just vote-appen och gör att första adminkontot kan skapas direkt i appen när adminlistan är tom.
+
+5. Deploya Edge Function för röstning om den inte redan är deployad:
 
    ```sh
    supabase functions deploy submit-vote
    ```
 
-5. Öppna `/admin`, skriv e-post och lösenord och klicka `Skapa första admin`.
+6. Öppna `/admin`, skriv e-post och lösenord och klicka `Skapa första admin`.
 
-6. När du är inloggad kan du under `Inställningar`:
+7. Om Supabase kräver e-postbekräftelse: skriv koden från mejlet i `Verifieringskod` och klicka `Verifiera kod`.
+
+8. När du är inloggad kan du under `Inställningar`:
 
    - byta lösenord på det inloggade kontot
    - lägga till fler admin-e-postadresser
