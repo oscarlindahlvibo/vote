@@ -422,7 +422,7 @@ export default function AdminPage() {
       setVotes([]);
       setResetPassword('');
       setResetConfirmText('');
-      setResetMessage('Rösträknaren är återställd.');
+      setResetMessage('Rösträknaren och IP-larmen är återställda.');
     }
 
     setResetLoading(false);
