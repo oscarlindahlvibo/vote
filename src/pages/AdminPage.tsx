@@ -31,6 +31,10 @@ const LOCAL_ADMIN_ENABLED =
 const LOCAL_ADMIN_EMAIL = import.meta.env.VITE_LOCAL_ADMIN_EMAIL as string | undefined;
 const LOCAL_ADMIN_PASSWORD = import.meta.env.VITE_LOCAL_ADMIN_PASSWORD as string | undefined;
 
+function getAdminRedirectUrl() {
+  return `${window.location.origin}/admin`;
+}
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString('sv-SE', {
     year: 'numeric',
@@ -73,7 +77,7 @@ export default function AdminPage() {
   useEffect(() => {
     let mounted = true;
 
-    supabase.rpc('has_admins').then(({ data }) => {
+    supabase.rpc('vote_has_admins').then(({ data }) => {
       if (!mounted) return;
       setHasAdminUsers(Boolean(data));
     });
@@ -124,7 +128,7 @@ export default function AdminPage() {
     if (error) {
       setLoginError('Inloggning misslyckades. Kontrollera e-post och lösenord.');
     } else if (hasAdminUsers === false && data.user.email) {
-      const { error: adminError } = await supabase.from('admin_users').insert({
+      const { error: adminError } = await supabase.from('vote_admin_users').insert({
         email: data.user.email.toLowerCase(),
         created_by: data.user.id,
       });
@@ -164,6 +168,9 @@ export default function AdminPage() {
     const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
       email: normalizedEmail,
       password,
+      options: {
+        emailRedirectTo: getAdminRedirectUrl(),
+      },
     });
 
     if (signUpError) {
@@ -187,7 +194,7 @@ export default function AdminPage() {
       return;
     }
 
-    const { error: adminError } = await supabase.from('admin_users').insert({
+    const { error: adminError } = await supabase.from('vote_admin_users').insert({
       email: normalizedEmail,
       created_by: sessionUserId,
     });
@@ -269,6 +276,9 @@ export default function AdminPage() {
     const { data, error } = await supabase.auth.signUp({
       email: normalizedEmail,
       password,
+      options: {
+        emailRedirectTo: getAdminRedirectUrl(),
+      },
     });
 
     if (error) {
@@ -293,7 +303,7 @@ export default function AdminPage() {
     }
 
     const normalizedEmail = newAdminEmail.trim().toLowerCase();
-    const { error } = await supabase.from('admin_users').insert({
+    const { error } = await supabase.from('vote_admin_users').insert({
       email: normalizedEmail,
     });
 

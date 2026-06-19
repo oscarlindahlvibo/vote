@@ -13,17 +13,25 @@ Adminpanelen använder Supabase Auth. Skapa inga adminlösenord i frontend-koden
    VITE_SUPABASE_ANON_KEY=...
    ```
 
-2. Kör Supabase-migrationerna. De skapar `admin_users`, låser röster till admins och gör att första adminkontot kan skapas direkt i appen när adminlistan är tom.
+2. Lägg till appens adminadress i Supabase Auth redirect URLs, till exempel:
 
-3. Deploya Edge Function för röstning om den inte redan är deployad:
+   ```text
+   https://vote.asedatruckmeet.se/admin
+   ```
+
+   Appen skickar även med aktuell `/admin`-adress när ett konto skapas, så lokala tester går till lokal admin och produktion går till produktionsadmin.
+
+3. Kör Supabase-migrationerna. De skapar `vote_admin_users`, låser röster till admins för just vote-appen och gör att första adminkontot kan skapas direkt i appen när adminlistan är tom.
+
+4. Deploya Edge Function för röstning om den inte redan är deployad:
 
    ```sh
    supabase functions deploy submit-vote
    ```
 
-4. Öppna `/admin`, skriv e-post och lösenord och klicka `Skapa första admin`.
+5. Öppna `/admin`, skriv e-post och lösenord och klicka `Skapa första admin`.
 
-5. När du är inloggad kan du under `Inställningar`:
+6. När du är inloggad kan du under `Inställningar`:
 
    - byta lösenord på det inloggade kontot
    - lägga till fler admin-e-postadresser
