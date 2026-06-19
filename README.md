@@ -47,5 +47,6 @@ Adminpanelen använder Supabase Auth. Skapa inga adminlösenord i frontend-koden
 
    - byta lösenord på det inloggade kontot
    - lägga till fler admin-e-postadresser
+   - återställa rösträknaren efter lösenordsbekräftelse
 
 När du lagt till en ny admin-e-post kan personen öppna `/admin`, skapa konto med samma e-postadress och sedan logga in som admin.

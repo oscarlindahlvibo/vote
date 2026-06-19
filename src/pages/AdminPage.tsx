@@ -15,8 +15,10 @@ import {
   Calendar,
   ChevronUp,
   ChevronDown,
+  AlertTriangle,
   KeyRound,
   Settings,
+  Trash2,
   UserPlus,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -25,6 +27,7 @@ import type { Vote, TruckTally } from '../lib/types';
 type SortKey = 'truck_number' | 'voter_name' | 'mobile_number' | 'created_at';
 type SortDir = 'asc' | 'desc';
 type Tab = 'summary' | 'individual' | 'settings';
+type IpAlert = { ip_address: string; vote_count: number; truck_numbers: number[] };
 
 const LOCAL_ADMIN_ENABLED =
   import.meta.env.DEV && import.meta.env.VITE_ENABLE_LOCAL_ADMIN === 'true';
@@ -71,6 +74,11 @@ export default function AdminPage() {
   const [createAdminMessage, setCreateAdminMessage] = useState('');
   const [createAdminError, setCreateAdminError] = useState('');
   const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetMessage, setResetMessage] = useState('');
+  const [resetError, setResetError] = useState('');
 
   const [sortKey, setSortKey] = useState<SortKey>('created_at');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -341,36 +349,6 @@ export default function AdminPage() {
     setPasswordLoading(false);
   };
 
-  const signUpAdminAccount = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthLoading(true);
-    setLoginError('');
-    setSetupMessage('');
-
-    if (password.length < 8) {
-      setLoginError('Lösenordet måste vara minst 8 tecken.');
-      setAuthLoading(false);
-      return;
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-    const { data, error } = await supabase.auth.signUp({
-      email: normalizedEmail,
-      password,
-      options: {
-        emailRedirectTo: getAdminRedirectUrl(),
-      },
-    });
-
-    if (error) {
-      setLoginError('Kunde inte skapa konto. Finns e-postadressen redan kan du logga in i stället.');
-    } else if (!data.session) {
-      setSetupMessage('Kontot är skapat. Ange verifieringskoden från mejlet här nedan.');
-    }
-
-    setAuthLoading(false);
-  };
-
   const createAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreateAdminLoading(true);
@@ -396,6 +374,58 @@ export default function AdminPage() {
     }
 
     setCreateAdminLoading(false);
+  };
+
+  const resetVotes = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetLoading(true);
+    setResetMessage('');
+    setResetError('');
+
+    if (localAdmin) {
+      setResetError('Det lokala förhandsvisningskontot kan inte återställa riktiga röster.');
+      setResetLoading(false);
+      return;
+    }
+
+    if (!adminEmail || !resetPassword) {
+      setResetError('Ange adminlösenordet.');
+      setResetLoading(false);
+      return;
+    }
+
+    if (resetConfirmText.trim().toUpperCase() !== 'NOLLSTALL') {
+      setResetError('Skriv NOLLSTALL för att bekräfta.');
+      setResetLoading(false);
+      return;
+    }
+
+    const { error: passwordError } = await supabase.auth.signInWithPassword({
+      email: adminEmail,
+      password: resetPassword,
+    });
+
+    if (passwordError) {
+      setResetError('Lösenordet stämmer inte.');
+      setResetLoading(false);
+      return;
+    }
+
+    const { error } = await supabase
+      .from('votes')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
+
+    if (error) {
+      setResetError('Kunde inte återställa rösterna.');
+    } else {
+      setVotes([]);
+      setResetPassword('');
+      setResetConfirmText('');
+      setResetMessage('Rösträknaren är återställd.');
+    }
+
+    setResetLoading(false);
   };
 
   const fetchVotes = useCallback(async () => {
@@ -444,6 +474,22 @@ export default function AdminPage() {
       : String(av).localeCompare(String(bv), 'sv');
     return sortDir === 'asc' ? cmp : -cmp;
   });
+
+  const ipAlerts: IpAlert[] = Object.values(
+    votes.reduce<Record<string, IpAlert>>((acc, vote) => {
+      const ip = vote.ip_address || 'unknown';
+      if (!acc[ip]) {
+        acc[ip] = { ip_address: ip, vote_count: 0, truck_numbers: [] };
+      }
+      acc[ip].vote_count++;
+      if (!acc[ip].truck_numbers.includes(vote.truck_number)) {
+        acc[ip].truck_numbers.push(vote.truck_number);
+      }
+      return acc;
+    }, {})
+  )
+    .filter((alert) => alert.vote_count > 1)
+    .sort((a, b) => b.vote_count - a.vote_count);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -569,17 +615,6 @@ export default function AdminPage() {
                 Skapa första admin
               </button>
             )}
-            {hasAdminUsers && (
-              <button
-                type="button"
-                onClick={(e) => signUpAdminAccount(e)}
-                disabled={authLoading}
-                className="w-full mt-3 border border-zinc-700 hover:border-zinc-600 text-zinc-300 hover:text-white font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"
-              >
-                <UserPlus className="w-4 h-4" />
-                Skapa konto
-              </button>
-            )}
           </form>
         </div>
       </div>
@@ -648,6 +683,10 @@ export default function AdminPage() {
           )}
         </div>
 
+        {ipAlerts.length > 0 && (
+          <IpAlertPanel alerts={ipAlerts} />
+        )}
+
         {/* Tabs */}
         <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1 mb-6 max-w-full overflow-x-auto w-fit">
           <button
@@ -698,11 +737,20 @@ export default function AdminPage() {
             createAdminLoading={createAdminLoading}
             createAdminMessage={createAdminMessage}
             createAdminError={createAdminError}
+            voteCount={votes.length}
+            resetPassword={resetPassword}
+            resetConfirmText={resetConfirmText}
+            resetLoading={resetLoading}
+            resetMessage={resetMessage}
+            resetError={resetError}
             setNewPassword={setNewPassword}
             setConfirmPassword={setConfirmPassword}
             setNewAdminEmail={setNewAdminEmail}
+            setResetPassword={setResetPassword}
+            setResetConfirmText={setResetConfirmText}
             changePassword={changePassword}
             createAdmin={createAdmin}
+            resetVotes={resetVotes}
           />
         ) : loading && votes.length === 0 ? (
           <div className="flex items-center justify-center py-24">
@@ -738,11 +786,20 @@ function SettingsTab({
   createAdminLoading,
   createAdminMessage,
   createAdminError,
+  voteCount,
+  resetPassword,
+  resetConfirmText,
+  resetLoading,
+  resetMessage,
+  resetError,
   setNewPassword,
   setConfirmPassword,
   setNewAdminEmail,
+  setResetPassword,
+  setResetConfirmText,
   changePassword,
   createAdmin,
+  resetVotes,
 }: {
   adminEmail: string;
   localAdmin: boolean;
@@ -755,11 +812,20 @@ function SettingsTab({
   createAdminLoading: boolean;
   createAdminMessage: string;
   createAdminError: string;
+  voteCount: number;
+  resetPassword: string;
+  resetConfirmText: string;
+  resetLoading: boolean;
+  resetMessage: string;
+  resetError: string;
   setNewPassword: (value: string) => void;
   setConfirmPassword: (value: string) => void;
   setNewAdminEmail: (value: string) => void;
+  setResetPassword: (value: string) => void;
+  setResetConfirmText: (value: string) => void;
   changePassword: (e: React.FormEvent) => void;
   createAdmin: (e: React.FormEvent) => void;
+  resetVotes: (e: React.FormEvent) => void;
 }) {
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -852,6 +918,96 @@ function SettingsTab({
           )}
         </button>
       </form>
+
+      <form onSubmit={resetVotes} className="bg-red-950/30 border border-red-900/60 rounded-2xl p-5 lg:col-span-2">
+        <div className="flex items-center gap-2 mb-5">
+          <Trash2 className="w-4 h-4 text-red-400" />
+          <h2 className="text-white font-bold text-base">Återställ rösträknaren</h2>
+        </div>
+
+        <p className="text-red-200/80 text-sm mb-4">
+          Detta raderar alla {voteCount} registrerade röster permanent. Åtgärden kräver adminlösenordet.
+        </p>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="block text-zinc-300 text-sm font-semibold mb-2">Adminlösenord</label>
+            <input
+              type="password"
+              autoComplete="current-password"
+              required
+              value={resetPassword}
+              onChange={(e) => setResetPassword(e.target.value)}
+              className="w-full bg-zinc-900 border border-red-900/60 rounded-xl px-4 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition-all"
+            />
+          </div>
+          <div>
+            <label className="block text-zinc-300 text-sm font-semibold mb-2">Bekräftelse</label>
+            <input
+              type="text"
+              autoComplete="off"
+              required
+              value={resetConfirmText}
+              onChange={(e) => setResetConfirmText(e.target.value)}
+              placeholder="Skriv NOLLSTALL"
+              className="w-full bg-zinc-900 border border-red-900/60 rounded-xl px-4 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition-all"
+            />
+          </div>
+        </div>
+
+        {resetError && <p className="text-red-300 text-sm mt-4">{resetError}</p>}
+        {resetMessage && <p className="text-emerald-400 text-sm mt-4">{resetMessage}</p>}
+
+        <button
+          type="submit"
+          disabled={resetLoading || voteCount === 0}
+          className="mt-5 w-full sm:w-auto bg-red-600 hover:bg-red-500 disabled:bg-red-900/50 disabled:cursor-not-allowed text-white font-bold px-5 py-3 rounded-xl transition-all flex items-center justify-center gap-2"
+        >
+          {resetLoading ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Återställer...
+            </>
+          ) : (
+            <>
+              <Trash2 className="w-4 h-4" />
+              Återställ rösträknaren
+            </>
+          )}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function IpAlertPanel({ alerts }: { alerts: IpAlert[] }) {
+  return (
+    <div className="bg-red-950/40 border border-red-900/60 rounded-2xl p-4 mb-6">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <h2 className="text-red-200 font-bold text-sm mb-1">Flera röster från samma IP</h2>
+          <p className="text-red-200/70 text-xs mb-3">
+            Kontrollera dessa rader i individuella svar om rösterna ser misstänkta ut.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {alerts.slice(0, 6).map((alert) => (
+              <div key={alert.ip_address} className="bg-zinc-950/50 border border-red-900/40 rounded-xl p-3">
+                <p className="text-red-100 font-mono text-xs break-all">{alert.ip_address}</p>
+                <p className="text-red-200/80 text-xs mt-1">
+                  {alert.vote_count} röster på lastbil #{alert.truck_numbers.slice(0, 4).join(', #')}
+                  {alert.truck_numbers.length > 4 ? '...' : ''}
+                </p>
+              </div>
+            ))}
+          </div>
+          {alerts.length > 6 && (
+            <p className="text-red-200/60 text-xs mt-3">
+              {alerts.length - 6} fler IP-adresser har flera röster.
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
