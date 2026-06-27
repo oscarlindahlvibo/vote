@@ -147,7 +147,18 @@ export default function VotingPage() {
                 placeholder="070 123 45 67"
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
               />
-              <p className="text-zinc-600 text-xs mt-1.5">Endast en röst per mobilnummer</p>
+              <p className="text-zinc-600 text-xs mt-1.5">
+                Endast en röst per mobilnummer. Vi lottar ut pris bland alla som röstar, så ange ett korrekt mobilnummer.
+              </p>
+            </div>
+
+            <div className="bg-zinc-950/60 border border-zinc-800 rounded-xl p-3.5 mb-5 space-y-2">
+              <p className="text-zinc-400 text-xs leading-relaxed">
+                Vinnare kontaktas per telefon efter röstningen.
+              </p>
+              <p className="text-zinc-500 text-xs leading-relaxed">
+                IP-adresser loggas för att upptäcka eventuellt fusk. Misstänkt fusk kan leda till diskvalificering.
+              </p>
             </div>
 
             {/* Error */}

@@ -27,7 +27,7 @@ import type { Vote, TruckTally } from '../lib/types';
 type SortKey = 'truck_number' | 'voter_name' | 'mobile_number' | 'created_at';
 type SortDir = 'asc' | 'desc';
 type Tab = 'summary' | 'individual' | 'settings';
-type IpAlert = { ip_address: string; vote_count: number; truck_numbers: number[] };
+type IpAlert = { ip_address: string; vote_count: number; truck_numbers: number[]; votes: Vote[] };
 
 const LOCAL_ADMIN_ENABLED =
   import.meta.env.DEV && import.meta.env.VITE_ENABLE_LOCAL_ADMIN === 'true';
@@ -479,17 +479,31 @@ export default function AdminPage() {
     votes.reduce<Record<string, IpAlert>>((acc, vote) => {
       const ip = vote.ip_address || 'unknown';
       if (!acc[ip]) {
-        acc[ip] = { ip_address: ip, vote_count: 0, truck_numbers: [] };
+        acc[ip] = { ip_address: ip, vote_count: 0, truck_numbers: [], votes: [] };
       }
       acc[ip].vote_count++;
+      acc[ip].votes.push(vote);
       if (!acc[ip].truck_numbers.includes(vote.truck_number)) {
         acc[ip].truck_numbers.push(vote.truck_number);
       }
       return acc;
     }, {})
   )
+    .map((alert) => ({
+      ...alert,
+      truck_numbers: [...alert.truck_numbers].sort((a, b) => a - b),
+      votes: [...alert.votes].sort((a, b) => {
+        const truckCmp = a.truck_number - b.truck_number;
+        if (truckCmp !== 0) return truckCmp;
+        return String(b.created_at).localeCompare(String(a.created_at));
+      }),
+    }))
     .filter((alert) => alert.vote_count > 1)
-    .sort((a, b) => b.vote_count - a.vote_count);
+    .sort((a, b) => {
+      const truckCmp = (a.truck_numbers[0] ?? 0) - (b.truck_numbers[0] ?? 0);
+      if (truckCmp !== 0) return truckCmp;
+      return b.vote_count - a.vote_count;
+    });
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -981,6 +995,8 @@ function SettingsTab({
 }
 
 function IpAlertPanel({ alerts }: { alerts: IpAlert[] }) {
+  const suspiciousVotes = alerts.reduce((sum, alert) => sum + alert.vote_count, 0);
+
   return (
     <div className="bg-red-950/40 border border-red-900/60 rounded-2xl p-4 mb-6">
       <div className="flex items-start gap-3">
@@ -988,24 +1004,47 @@ function IpAlertPanel({ alerts }: { alerts: IpAlert[] }) {
         <div className="min-w-0 flex-1">
           <h2 className="text-red-200 font-bold text-sm mb-1">Flera röster från samma IP</h2>
           <p className="text-red-200/70 text-xs mb-3">
-            Kontrollera dessa rader i individuella svar om rösterna ser misstänkta ut.
+            {alerts.length} IP-adress{alerts.length !== 1 ? 'er' : ''} har tillsammans {suspiciousVotes} röster.
           </p>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {alerts.slice(0, 6).map((alert) => (
+          <div className="max-h-[32rem] overflow-y-auto pr-1 space-y-3">
+            {alerts.map((alert) => (
               <div key={alert.ip_address} className="bg-zinc-950/50 border border-red-900/40 rounded-xl p-3">
-                <p className="text-red-100 font-mono text-xs break-all">{alert.ip_address}</p>
-                <p className="text-red-200/80 text-xs mt-1">
-                  {alert.vote_count} röster på lastbil #{alert.truck_numbers.slice(0, 4).join(', #')}
-                  {alert.truck_numbers.length > 4 ? '...' : ''}
-                </p>
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-red-100 font-mono text-xs break-all">{alert.ip_address}</p>
+                    <p className="text-red-200/80 text-xs mt-1">
+                      {alert.vote_count} röster på #{alert.truck_numbers.join(', #')}
+                    </p>
+                  </div>
+                  <span className="w-fit rounded-full bg-red-500/15 border border-red-500/30 px-2 py-1 text-red-200 text-xs font-bold">
+                    {alert.vote_count} röster
+                  </span>
+                </div>
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full min-w-[620px] text-xs">
+                    <thead>
+                      <tr className="border-b border-red-900/30 text-red-200/60">
+                        <th className="py-2 pr-3 text-left font-semibold">Lastbil</th>
+                        <th className="py-2 pr-3 text-left font-semibold">Namn</th>
+                        <th className="py-2 pr-3 text-left font-semibold">Mobil</th>
+                        <th className="py-2 text-left font-semibold">Tid</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-red-900/20">
+                      {alert.votes.map((vote) => (
+                        <tr key={vote.id}>
+                          <td className="py-2 pr-3 text-amber-300 font-bold">#{vote.truck_number}</td>
+                          <td className="py-2 pr-3 text-white">{vote.voter_name}</td>
+                          <td className="py-2 pr-3 text-zinc-300 font-mono">{vote.mobile_number}</td>
+                          <td className="py-2 text-zinc-400">{formatDate(vote.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             ))}
           </div>
-          {alerts.length > 6 && (
-            <p className="text-red-200/60 text-xs mt-3">
-              {alerts.length - 6} fler IP-adresser har flera röster.
-            </p>
-          )}
         </div>
       </div>
     </div>
