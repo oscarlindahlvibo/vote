@@ -13,6 +13,7 @@ import {
   Phone,
   Globe,
   Calendar,
+  ArrowLeft,
   ChevronUp,
   ChevronDown,
   AlertTriangle,
@@ -28,6 +29,7 @@ type SortKey = 'truck_number' | 'voter_name' | 'mobile_number' | 'created_at';
 type SortDir = 'asc' | 'desc';
 type Tab = 'summary' | 'individual' | 'settings';
 type IpAlert = { ip_address: string; vote_count: number; truck_numbers: number[]; votes: Vote[] };
+type TruckIpGroup = { ip_address: string; votes: Vote[] };
 
 const LOCAL_ADMIN_ENABLED =
   import.meta.env.DEV && import.meta.env.VITE_ENABLE_LOCAL_ADMIN === 'true';
@@ -79,6 +81,7 @@ export default function AdminPage() {
   const [resetLoading, setResetLoading] = useState(false);
   const [resetMessage, setResetMessage] = useState('');
   const [resetError, setResetError] = useState('');
+  const [selectedTruckNumber, setSelectedTruckNumber] = useState<number | null>(null);
 
   const [sortKey, setSortKey] = useState<SortKey>('created_at');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -505,6 +508,25 @@ export default function AdminPage() {
       return b.vote_count - a.vote_count;
     });
 
+  const selectedTruckVotes = selectedTruckNumber
+    ? votes
+        .filter((vote) => vote.truck_number === selectedTruckNumber)
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    : [];
+
+  const selectedTruckIpGroups: TruckIpGroup[] = Object.values(
+    selectedTruckVotes.reduce<Record<string, TruckIpGroup>>((acc, vote) => {
+      const ip = vote.ip_address || 'unknown';
+      if (!acc[ip]) acc[ip] = { ip_address: ip, votes: [] };
+      acc[ip].votes.push(vote);
+      return acc;
+    }, {})
+  ).sort((a, b) => {
+    const countCmp = b.votes.length - a.votes.length;
+    if (countCmp !== 0) return countCmp;
+    return a.ip_address.localeCompare(b.ip_address);
+  });
+
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(key); setSortDir('asc'); }
@@ -701,6 +723,14 @@ export default function AdminPage() {
           <IpAlertPanel alerts={ipAlerts} />
         )}
 
+        {selectedTruckNumber !== null && (
+          <TruckVoteDetail
+            truckNumber={selectedTruckNumber}
+            groups={selectedTruckIpGroups}
+            onClose={() => setSelectedTruckNumber(null)}
+          />
+        )}
+
         {/* Tabs */}
         <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1 mb-6 max-w-full overflow-x-auto w-fit">
           <button
@@ -775,12 +805,17 @@ export default function AdminPage() {
             {loadError}
           </div>
         ) : tab === 'summary' ? (
-          <SummaryTab tally={tally} maxVotes={maxVotes} />
+          <SummaryTab
+            tally={tally}
+            maxVotes={maxVotes}
+            onSelectTruck={setSelectedTruckNumber}
+          />
         ) : (
           <IndividualTab
             votes={sortedVotes}
             toggleSort={toggleSort}
             SortIcon={SortIcon}
+            onSelectTruck={setSelectedTruckNumber}
           />
         )}
       </div>
@@ -1051,7 +1086,94 @@ function IpAlertPanel({ alerts }: { alerts: IpAlert[] }) {
   );
 }
 
-function SummaryTab({ tally, maxVotes }: { tally: TruckTally[]; maxVotes: number }) {
+function TruckVoteDetail({
+  truckNumber,
+  groups,
+  onClose,
+}: {
+  truckNumber: number;
+  groups: TruckIpGroup[];
+  onClose: () => void;
+}) {
+  const voteCount = groups.reduce((sum, group) => sum + group.votes.length, 0);
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden mb-6">
+      <div className="px-4 py-3 border-b border-zinc-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Truck className="w-4 h-4 text-amber-400" />
+            <h2 className="text-white font-bold text-sm">Röster för lastbil #{truckNumber}</h2>
+          </div>
+          <p className="text-zinc-500 text-xs mt-1">
+            {voteCount} röst{voteCount !== 1 ? 'er' : ''} grupperade på {groups.length} IP-adress{groups.length !== 1 ? 'er' : ''}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-fit flex items-center gap-1.5 text-zinc-400 hover:text-white text-xs border border-zinc-800 hover:border-zinc-700 px-3 py-1.5 rounded-lg transition-all"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          Tillbaka
+        </button>
+      </div>
+
+      {groups.length === 0 ? (
+        <div className="text-center py-12 text-zinc-600">
+          <p>Inga röster hittades för denna lastbil.</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-zinc-800/50">
+          {groups.map((group) => (
+            <div key={group.ip_address} className="p-4">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between mb-3">
+                <p className="text-zinc-300 font-mono text-xs break-all">{group.ip_address}</p>
+                <span className={`w-fit rounded-full border px-2 py-1 text-xs font-bold ${
+                  group.votes.length > 1
+                    ? 'bg-red-500/15 border-red-500/30 text-red-200'
+                    : 'bg-zinc-800 border-zinc-700 text-zinc-300'
+                }`}>
+                  {group.votes.length} röst{group.votes.length !== 1 ? 'er' : ''}
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[560px] text-xs">
+                  <thead>
+                    <tr className="border-b border-zinc-800 text-zinc-500">
+                      <th className="py-2 pr-3 text-left font-semibold">Namn</th>
+                      <th className="py-2 pr-3 text-left font-semibold">Mobil</th>
+                      <th className="py-2 text-left font-semibold">Tid</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800/50">
+                    {group.votes.map((vote) => (
+                      <tr key={vote.id}>
+                        <td className="py-2 pr-3 text-white">{vote.voter_name}</td>
+                        <td className="py-2 pr-3 text-zinc-300 font-mono">{vote.mobile_number}</td>
+                        <td className="py-2 text-zinc-400">{formatDate(vote.created_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SummaryTab({
+  tally,
+  maxVotes,
+  onSelectTruck,
+}: {
+  tally: TruckTally[];
+  maxVotes: number;
+  onSelectTruck: (truckNumber: number) => void;
+}) {
   if (tally.length === 0) {
     return (
       <div className="text-center py-20 text-zinc-600">
@@ -1080,9 +1202,13 @@ function SummaryTab({ tally, maxVotes }: { tally: TruckTally[]; maxVotes: number
                 )}
               </div>
               <div className="w-16 flex-shrink-0">
-                <span className={`font-black text-base ${i === 0 ? 'text-amber-400' : 'text-white'}`}>
+                <button
+                  type="button"
+                  onClick={() => onSelectTruck(t.truck_number)}
+                  className={`font-black text-base hover:underline underline-offset-4 transition-colors ${i === 0 ? 'text-amber-400 hover:text-amber-300' : 'text-white hover:text-amber-300'}`}
+                >
                   #{t.truck_number}
-                </span>
+                </button>
               </div>
               <div className="flex-1 min-w-0">
                 <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
@@ -1110,10 +1236,12 @@ function IndividualTab({
   votes,
   toggleSort,
   SortIcon,
+  onSelectTruck,
 }: {
   votes: Vote[];
   toggleSort: (k: SortKey) => void;
   SortIcon: React.FC<{ k: SortKey }>;
+  onSelectTruck: (truckNumber: number) => void;
 }) {
   if (votes.length === 0) {
     return (
@@ -1162,7 +1290,15 @@ function IndividualTab({
           <tbody className="divide-y divide-zinc-800/50">
             {votes.map((v) => (
               <tr key={v.id} className="hover:bg-zinc-800/30 transition-colors">
-                <td className="px-4 py-3 font-bold text-amber-400">#{v.truck_number}</td>
+                <td className="px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => onSelectTruck(v.truck_number)}
+                    className="font-bold text-amber-400 hover:text-amber-300 hover:underline underline-offset-4"
+                  >
+                    #{v.truck_number}
+                  </button>
+                </td>
                 <td className="px-4 py-3 text-white">{v.voter_name}</td>
                 <td className="px-4 py-3 text-zinc-300 font-mono text-xs">{v.mobile_number}</td>
                 <td className="px-4 py-3 text-zinc-400 text-xs">{formatDate(v.created_at)}</td>
@@ -1178,7 +1314,13 @@ function IndividualTab({
         {votes.map((v) => (
           <div key={v.id} className="px-4 py-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-amber-400 font-black text-lg">#{v.truck_number}</span>
+              <button
+                type="button"
+                onClick={() => onSelectTruck(v.truck_number)}
+                className="text-amber-400 hover:text-amber-300 hover:underline underline-offset-4 font-black text-lg"
+              >
+                #{v.truck_number}
+              </button>
               <span className="text-zinc-500 text-xs">{formatDate(v.created_at)}</span>
             </div>
             <p className="text-white font-semibold text-sm">{v.voter_name}</p>
